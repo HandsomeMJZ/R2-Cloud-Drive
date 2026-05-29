@@ -34,14 +34,6 @@
 ### 前置条件
 
 - [Cloudflare](https://dash.cloudflare.com/) 账号
-- [PayPal](https://www.paypal.com/) 你的 cloudflare 账号必须绑定 PayPal，否则无法创建 R2 存储桶
-- 🧹 **孤儿文件清扫**：未选中文件时点击删除按钮，可扫描并清理 R2 中未被引用的残留对象，释放存储空间
-
-## 部署教程
-
-### 前置条件
-
-- [Cloudflare](https://dash.cloudflare.com/) 账号
 - [PayPal](https://www.paypal.com/)你的cloudflare账号必须绑定PayPal,否则无法创建R2存储桶
 
 ### 步骤 1：创建 R2 存储桶
