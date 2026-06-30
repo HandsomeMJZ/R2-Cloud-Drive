@@ -1,7 +1,7 @@
 {
-  "version": "1.1.8",
-  "versionCode": 118,
-  "releaseDate": "2026-06-04",
-  "releaseNotes": "时间显示默认改为 UTC+8 (北京时间),优化一些细节.",
+  "version": "1.1.9",
+  "versionCode": 119,
+  "releaseDate": "2026-06-30",
+  "releaseNotes": "修复 Session HMAC 校验漏洞，增加同源 CSRF 防护@bilibili_锦衣夜行；新增文件/目录条件分享，支持密码、有效期、访问次数、记录管理、刷新链接与取消分享；保留 /shared 公开共享目录。",
   "downloadUrl": "https://github.com/HandsomeMJZ/R2-Cloud-Drive"
 }
