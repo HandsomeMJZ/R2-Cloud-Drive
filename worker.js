@@ -34,22 +34,6 @@
  *
  * 7. 存储节点密钥 (可选 - 节点 Worker 接收分片时使用)
  *    STORAGE_NODE_TOKEN = "your-node-token"
- *
- * ============================================
- * 功能列表
- * ============================================
- * - 文件上传/下载/删除/重命名/新建文件夹
- * - 网格/列表两种视图模式
- * - 单击选中文件，支持多选
- * - 横向操作栏：复制、剪切、粘贴、重命名、下载、删除
- * - 剪贴板通过 D1 持久化，跨页面导航不丢失
- * - 共享文件夹 (/shared) — 无需登录，只读下载
- * - 容量显示 (默认 10 GB)
- * - 多账号存储节点：大文件分片分布存储 + manifest 索引
- * - 夜间模式切换 (深色主题)
- * - 拖拽上传，上传进度显示
- * - 右键上下文菜单
- * - 备份目录同步 API (/api/backup-dirs) — 跨设备保留同步目录
  */
 
 const MIME_TYPES = {
@@ -507,6 +491,53 @@ function renderHTML(content, title = 'R2 云盘') {
   .modal-footer {
     padding: 8px 16px 16px;
     display: flex; justify-content: flex-end; gap: 8px;
+  }
+  .share-summary {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; margin-bottom: 16px;
+    border: 1px solid var(--outline); border-radius: var(--radius-m);
+    background: rgba(60,64,67,.04);
+  }
+  .share-summary .material-icons-round { color: var(--primary); }
+  .share-summary-main { min-width: 0; flex: 1; }
+  .share-summary-label { font-size: 12px; color: var(--on-surface-variant); margin-bottom: 2px; }
+  .share-summary-path { font-size: 14px; color: var(--on-surface); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .share-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .share-form-grid .full { grid-column: 1 / -1; }
+  .share-hint { font-size: 12px; color: var(--on-surface-variant); margin-top: 6px; line-height: 1.45; }
+  .share-result {
+    display: none; margin-top: 16px; padding: 12px;
+    border: 1px solid var(--outline); border-radius: var(--radius-m);
+    background: var(--primary-light);
+  }
+  .share-result.open { display: block; }
+  .share-link-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .share-link-row .text-field { flex: 1; min-width: 0; }
+  .share-records {
+    margin-top: 18px; border-top: 1px solid var(--outline);
+    padding-top: 14px; display: flex; flex-direction: column; gap: 8px;
+    max-height: 260px; overflow-y: auto;
+  }
+  .share-record-row {
+    border: 1px solid var(--outline); border-radius: var(--radius-m);
+    padding: 10px 12px; background: var(--surface);
+  }
+  .share-record-row.editing { border-color: var(--primary); background: var(--primary-light); }
+  .share-record-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .share-record-url {
+    flex: 1; min-width: 0; font-size: 13px; color: var(--primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .share-record-meta { font-size: 12px; color: var(--on-surface-variant); line-height: 1.5; }
+  .share-record-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .share-record-actions .btn-outlined { height: 32px; padding: 0 10px; font-size: 12px; }
+  .share-record-empty {
+    padding: 14px; border: 1px dashed var(--outline); border-radius: var(--radius-m);
+    color: var(--on-surface-variant); font-size: 13px; text-align: center;
+  }
+  @media (max-width: 640px) {
+    .share-form-grid { grid-template-columns: 1fr; }
+    .share-link-row { flex-direction: column; align-items: stretch; }
   }
 
   /* ── Upload Zone ── */
@@ -1005,7 +1036,7 @@ ${content}
 
 <footer class="foot-bar">
   <span class="version-info" id="versionInfo" title="检查更新">
-    <span>v1.1.8</span>
+    <span>v1.1.9</span>
     <span class="version-badge" id="versionBadge">有新版本</span>
     <span class="version-tooltip" id="versionTooltip">
       <div class="version-tooltip-title">版本更新检查</div>
@@ -1056,6 +1087,9 @@ ${content}
   </div>
   <div class="context-menu-item" onclick="ctxPaste()">
     <span class="material-icons-round">content_paste</span><span>粘贴</span>
+  </div>
+  <div class="context-menu-item" onclick="ctxShare()">
+    <span class="material-icons-round">ios_share</span><span>分享设置</span>
   </div>
   <div class="context-menu-divider"></div>
   <div class="context-menu-item" onclick="ctxPreview()">
@@ -1126,6 +1160,11 @@ let downloadProgressTimer;
 
 function downloadUrl(path) {
   return '/api/download?path=' + encodeURIComponent(path);
+}
+
+const CSRF_HEADER = { 'X-R2Drive-CSRF': 'same-origin' };
+function jsonHeaders(extra) {
+  return Object.assign({ 'Content-Type': 'application/json' }, CSRF_HEADER, extra || {});
 }
 
 function getFileSizeByName(name) {
@@ -1546,7 +1585,7 @@ async function saveClipboard() {
   try {
     await fetch('/api/clipboard?id=' + getClipboardId(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(),
       body: JSON.stringify(clipboard)
     });
   } catch(e) { /* ignore */ }
@@ -1565,7 +1604,7 @@ async function loadClipboard() {
 async function clearClipboard() {
   clipboard = { items: [], action: null, sourcePath: '' };
   try {
-    await fetch('/api/clipboard?id=' + getClipboardId(), { method: 'DELETE' });
+    await fetch('/api/clipboard?id=' + getClipboardId(), { method: 'DELETE', headers: CSRF_HEADER });
   } catch(e) { /* ignore */ }
   updateActionBar();
 }
@@ -1601,7 +1640,7 @@ async function pasteFiles() {
   try {
     const res = await fetch('/api/clipboard/paste', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(),
       body: JSON.stringify({
         action,
         items: clipboard.items,
@@ -1641,7 +1680,7 @@ function renameSelected() {
   const newPath = currentPath ? currentPath + '/' + newName : newName;
   fetch('/api/rename', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify({ from: oldPath, to: newPath })
   }).then(r => r.ok ? (showSnackbar('已重命名'), location.reload()) : showSnackbar('重命名失败'));
 }
@@ -1722,7 +1761,7 @@ function deleteSelected() {
   const paths = [...selectedFiles].map(name => currentPath ? currentPath + '/' + name : name);
   fetch('/api/delete-batch', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify({ paths })
   }).then(r => r.ok ? (showSnackbar('已删除 ' + selectedFiles.size + ' 个文件'), location.reload()) : showSnackbar('删除失败'));
 }
@@ -1753,7 +1792,7 @@ async function scanOrphans() {
   try {
     const res = await fetch('/api/orphan-cleanup', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(),
       body: JSON.stringify({ action: 'scan' })
     });
     const data = await res.json();
@@ -1818,7 +1857,7 @@ async function deleteSelectedOrphans() {
   try {
     const res = await fetch('/api/orphan-cleanup', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(),
       body: JSON.stringify({ action: 'clean', keys })
     });
     const data = await res.json();
@@ -1960,7 +1999,7 @@ function ctxRename() {
   if (!newName || newName === ctxTarget) return;
   const oldPath = currentPath ? currentPath + '/' + ctxTarget : ctxTarget;
   const newPath = currentPath ? currentPath + '/' + newName : newName;
-  fetch('/api/rename', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({from: oldPath, to: newPath}) })
+  fetch('/api/rename', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({from: oldPath, to: newPath}) })
     .then(r => r.ok ? (showSnackbar('已重命名'), location.reload()) : showSnackbar('重命名失败'));
 }
 function ctxCopyLink() {
@@ -1969,11 +2008,295 @@ function ctxCopyLink() {
   const url = location.origin + '/api/download?path=' + encodeURIComponent(path);
   navigator.clipboard.writeText(url).then(() => showSnackbar('链接已复制'));
 }
+let shareTargetPathValue = '';
+let createdShareLink = '';
+let shareEditId = '';
+let shareRecordsCache = [];
+function openShareModal(path) {
+  shareTargetPathValue = path || '';
+  createdShareLink = '';
+  shareEditId = '';
+  shareRecordsCache = [];
+  const modal = document.getElementById('shareModal');
+  const target = document.getElementById('shareTargetPath');
+  const password = document.getElementById('sharePasswordInput');
+  const days = document.getElementById('shareDaysInput');
+  const maxAccess = document.getElementById('shareMaxAccessInput');
+  const result = document.getElementById('shareResult');
+  const linkInput = document.getElementById('shareLinkInput');
+  if (target) target.textContent = path || '';
+  if (result) result.classList.remove('open');
+  if (linkInput) linkInput.value = '';
+  modal?.classList.add('open');
+  resetShareForm();
+  loadSharesForTarget(path);
+  setTimeout(() => password?.focus(), 100);
+}
+function closeShareModal() {
+  document.getElementById('shareModal')?.classList.remove('open');
+}
+function resetShareForm() {
+  shareEditId = '';
+  createdShareLink = '';
+  const password = document.getElementById('sharePasswordInput');
+  const days = document.getElementById('shareDaysInput');
+  const maxAccess = document.getElementById('shareMaxAccessInput');
+  const clearPassword = document.getElementById('shareClearPasswordInput');
+  const clearLabel = document.getElementById('shareClearPasswordLabel');
+  const hint = document.getElementById('sharePasswordHint');
+  const result = document.getElementById('shareResult');
+  const linkInput = document.getElementById('shareLinkInput');
+  const btn = document.getElementById('shareCreateBtn');
+  const newBtn = document.getElementById('shareNewBtn');
+  if (password) {
+    password.value = '';
+    password.placeholder = '留空表示无需密码';
+  }
+  if (days) days.value = '';
+  if (maxAccess) maxAccess.value = '';
+  if (clearPassword) clearPassword.checked = false;
+  if (clearLabel) clearLabel.style.display = 'none';
+  if (hint) hint.textContent = '创建新分享时留空表示无需密码';
+  if (result) result.classList.remove('open');
+  if (linkInput) linkInput.value = '';
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-icons-round">ios_share</span> 创建分享';
+  }
+  if (newBtn) newBtn.style.display = 'none';
+  renderShareRecords(shareRecordsCache);
+}
+function daysFromExpiresAt(expiresAt) {
+  if (!expiresAt) return '';
+  const diff = Date.parse(expiresAt) - Date.now();
+  if (!Number.isFinite(diff) || diff <= 0) return '0';
+  return String(Math.max(1, Math.ceil(diff / 86400000)));
+}
+async function submitShareForm() {
+  if (!shareTargetPathValue) return;
+  const password = document.getElementById('sharePasswordInput')?.value || '';
+  const daysRaw = document.getElementById('shareDaysInput')?.value || '';
+  const maxRaw = document.getElementById('shareMaxAccessInput')?.value || '';
+  const clearPassword = !!document.getElementById('shareClearPasswordInput')?.checked;
+  const days = Number(String(daysRaw).trim() || 0);
+  const maxAccesses = Number(String(maxRaw).trim() || 0);
+  if (!Number.isFinite(days) || days < 0) { showSnackbar('有效天数格式不正确'); return; }
+  if (!Number.isInteger(maxAccesses) || maxAccesses < 0) { showSnackbar('访问次数格式不正确'); return; }
+
+  const btn = document.getElementById('shareCreateBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-round">sync</span> ' + (shareEditId ? '保存中...' : '创建中...');
+  }
+  try {
+    const body = {
+      path: shareTargetPathValue,
+      ttlSeconds: days > 0 ? Math.round(days * 86400) : 0,
+      maxAccesses
+    };
+    if (shareEditId) {
+      body.id = shareEditId;
+      body.passwordMode = clearPassword ? 'clear' : (password ? 'set' : 'keep');
+      if (password) body.password = password;
+    } else {
+      body.password = password;
+    }
+    const res = await fetch(shareEditId ? '/api/shares?id=' + encodeURIComponent(shareEditId) : '/api/shares', {
+      method: shareEditId ? 'PUT' : 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify(body)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.share?.url) throw new Error(data.error || 'share failed');
+    createdShareLink = location.origin + data.share.url;
+    const linkInput = document.getElementById('shareLinkInput');
+    const result = document.getElementById('shareResult');
+    if (linkInput) {
+      linkInput.value = createdShareLink;
+      linkInput.select();
+    }
+    result?.classList.add('open');
+    await navigator.clipboard.writeText(createdShareLink).catch(() => {});
+    showSnackbar(shareEditId ? '分享设置已更新' : '分享链接已创建并复制');
+    await loadSharesForTarget(shareTargetPathValue, data.share.id);
+  } catch (err) {
+    showSnackbar((shareEditId ? '更新分享失败：' : '创建分享失败：') + (err.message || '未知错误'));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = shareEditId
+        ? '<span class="material-icons-round">save</span> 保存修改'
+        : '<span class="material-icons-round">ios_share</span> 创建分享';
+    }
+  }
+}
+function copyCreatedShareLink() {
+  const link = createdShareLink || document.getElementById('shareLinkInput')?.value || '';
+  if (!link) return;
+  navigator.clipboard.writeText(link).then(() => showSnackbar('分享链接已复制'));
+}
+function shareAbsoluteUrl(share) {
+  return location.origin + (share?.url || ('/s/' + share?.id));
+}
+function shareMetaText(share) {
+  const expires = share.expiresAt ? ('有效期至 ' + formatDate(share.expiresAt)) : '长期有效';
+  const limit = share.maxAccesses ? ('访问 ' + (share.accessCount || 0) + ' / ' + share.maxAccesses + ' 次') : ('已访问 ' + (share.accessCount || 0) + ' 次');
+  const pwd = share.hasPassword ? '需要密码' : '无需密码';
+  const inactive = share.inactiveReason ? (' · 已失效：' + share.inactiveReason) : '';
+  return pwd + ' · ' + expires + ' · ' + limit + inactive;
+}
+function renderShareRecords(shares = []) {
+  const list = document.getElementById('shareRecords');
+  if (!list) return;
+  if (!shares.length) {
+    list.innerHTML = '<div class="share-record-empty">暂无分享记录</div>';
+    return;
+  }
+  list.innerHTML = '';
+  shares.forEach(share => {
+    const row = document.createElement('div');
+    row.className = 'share-record-row' + (share.id === shareEditId ? ' editing' : '');
+
+    const top = document.createElement('div');
+    top.className = 'share-record-top';
+    const icon = document.createElement('span');
+    icon.className = 'material-icons-round';
+    icon.textContent = share.hasPassword ? 'lock' : 'link';
+    const url = document.createElement('div');
+    url.className = 'share-record-url';
+    url.title = shareAbsoluteUrl(share);
+    url.textContent = shareAbsoluteUrl(share);
+    top.append(icon, url);
+
+    const meta = document.createElement('div');
+    meta.className = 'share-record-meta';
+    meta.textContent = shareMetaText(share);
+
+    const actions = document.createElement('div');
+    actions.className = 'share-record-actions';
+    const actionDefs = [
+      ['content_copy', '复制', () => copyShareRecordLink(share.id)],
+      ['edit', '编辑', () => editShareRecord(share.id)],
+      ['refresh', '刷新链接', () => refreshShareRecord(share.id)],
+      ['link_off', '取消分享', () => deleteShareRecord(share.id)]
+    ];
+    actionDefs.forEach(([iconName, label, handler]) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn-outlined';
+      btn.type = 'button';
+      btn.innerHTML = '<span class="material-icons-round">' + iconName + '</span> ' + label;
+      btn.addEventListener('click', handler);
+      actions.appendChild(btn);
+    });
+
+    row.append(top, meta, actions);
+    list.appendChild(row);
+  });
+}
+async function loadSharesForTarget(path, highlightId = '') {
+  const list = document.getElementById('shareRecords');
+  if (list) list.innerHTML = '<div class="share-record-empty">正在加载分享记录...</div>';
+  try {
+    const res = await fetch('/api/shares?path=' + encodeURIComponent(path || ''));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'load shares failed');
+    shareRecordsCache = Array.isArray(data.shares) ? data.shares : [];
+    if (highlightId) shareEditId = highlightId;
+    renderShareRecords(shareRecordsCache);
+  } catch (err) {
+    if (list) list.innerHTML = '<div class="share-record-empty">分享记录加载失败</div>';
+  }
+}
+function copyShareRecordLink(id) {
+  const share = shareRecordsCache.find(item => item.id === id);
+  if (!share) return;
+  navigator.clipboard.writeText(shareAbsoluteUrl(share)).then(() => showSnackbar('分享链接已复制'));
+}
+function editShareRecord(id) {
+  const share = shareRecordsCache.find(item => item.id === id);
+  if (!share) return;
+  shareEditId = id;
+  createdShareLink = shareAbsoluteUrl(share);
+  const password = document.getElementById('sharePasswordInput');
+  const days = document.getElementById('shareDaysInput');
+  const maxAccess = document.getElementById('shareMaxAccessInput');
+  const clearPassword = document.getElementById('shareClearPasswordInput');
+  const clearLabel = document.getElementById('shareClearPasswordLabel');
+  const hint = document.getElementById('sharePasswordHint');
+  const linkInput = document.getElementById('shareLinkInput');
+  const result = document.getElementById('shareResult');
+  const btn = document.getElementById('shareCreateBtn');
+  const newBtn = document.getElementById('shareNewBtn');
+  if (password) {
+    password.value = '';
+    password.placeholder = share.hasPassword ? '留空则保留原密码' : '输入新密码';
+  }
+  if (days) days.value = daysFromExpiresAt(share.expiresAt);
+  if (maxAccess) maxAccess.value = share.maxAccesses || '';
+  if (clearPassword) clearPassword.checked = false;
+  if (clearLabel) clearLabel.style.display = share.hasPassword ? 'flex' : 'none';
+  if (hint) hint.textContent = '编辑分享时，密码留空表示保持不变';
+  if (linkInput) linkInput.value = createdShareLink;
+  result?.classList.add('open');
+  if (btn) btn.innerHTML = '<span class="material-icons-round">save</span> 保存修改';
+  if (newBtn) newBtn.style.display = '';
+  renderShareRecords(shareRecordsCache);
+}
+async function deleteShareRecord(id) {
+  const btnShare = shareRecordsCache.find(item => item.id === id);
+  if (!btnShare) return;
+  try {
+    const res = await fetch('/api/shares?id=' + encodeURIComponent(id), { method: 'DELETE', headers: CSRF_HEADER });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'delete failed');
+    if (shareEditId === id) resetShareForm();
+    showSnackbar('分享已取消');
+    await loadSharesForTarget(shareTargetPathValue);
+  } catch (err) {
+    showSnackbar('取消分享失败：' + (err.message || '未知错误'));
+  }
+}
+async function refreshShareRecord(id) {
+  try {
+    const res = await fetch('/api/shares/refresh', {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ id })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.share?.url) throw new Error(data.error || 'refresh failed');
+    createdShareLink = shareAbsoluteUrl(data.share);
+    const linkInput = document.getElementById('shareLinkInput');
+    const result = document.getElementById('shareResult');
+    if (linkInput) linkInput.value = createdShareLink;
+    result?.classList.add('open');
+    await navigator.clipboard.writeText(createdShareLink).catch(() => {});
+    shareEditId = data.share.id;
+    showSnackbar('分享链接已刷新并复制');
+    await loadSharesForTarget(shareTargetPathValue, data.share.id);
+  } catch (err) {
+    showSnackbar('刷新链接失败：' + (err.message || '未知错误'));
+  }
+}
+function selectedPathFromName(name) {
+  return currentPath ? currentPath + '/' + name : name;
+}
+async function createShareForPath(path) {
+  openShareModal(path);
+}
+function shareSelected() {
+  if (selectedFiles.size !== 1) { showSnackbar('请选择一个文件或目录再分享'); return; }
+  createShareForPath(selectedPathFromName([...selectedFiles][0]));
+}
+function ctxShare() {
+  if (!ctxTarget) return;
+  createShareForPath(selectedPathFromName(ctxTarget));
+}
 function ctxDelete() {
   if (!ctxTarget) return;
   if (!confirm('确定删除 "' + ctxTarget + '"？')) return;
   const path = currentPath ? currentPath + '/' + ctxTarget : ctxTarget;
-  fetch('/api/delete?path=' + encodeURIComponent(path), { method: 'DELETE' })
+  fetch('/api/delete?path=' + encodeURIComponent(path), { method: 'DELETE', headers: CSRF_HEADER })
     .then(r => r.ok ? (showSnackbar('已删除'), location.reload()) : showSnackbar('删除失败'));
 }
 
@@ -2066,6 +2389,7 @@ function uploadDirect(file, path, fill, pctSpan) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload?path=' + encodeURIComponent(path));
+    xhr.setRequestHeader('X-R2Drive-CSRF', 'same-origin');
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) {
         const pct = Math.round(e.loaded / e.total * 100);
@@ -2101,7 +2425,7 @@ async function uploadMultipart(file, path, fill, pctSpan) {
   try {
     const initRes = await fetch('/api/multipart/init', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: jsonHeaders(),
       body: JSON.stringify({ path, contentType: file.type || '' })
     });
     if (!initRes.ok) throw new Error(await fetchErrorMessage(initRes, 'multipart init failed'));
@@ -2123,7 +2447,7 @@ async function uploadMultipart(file, path, fill, pctSpan) {
 
     const completeRes = await fetch('/api/multipart/complete', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: jsonHeaders(),
       body: JSON.stringify({ path, uploadId, parts })
     });
     if (!completeRes.ok) throw new Error(await fetchErrorMessage(completeRes, 'multipart complete failed'));
@@ -2134,7 +2458,7 @@ async function uploadMultipart(file, path, fill, pctSpan) {
     if (uploadId) {
       fetch('/api/multipart/abort', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: jsonHeaders(),
         body: JSON.stringify({ path, uploadId })
       }).catch(() => {});
     }
@@ -2151,6 +2475,7 @@ function uploadMultipartPart(path, uploadId, partNumber, chunk, onProgress) {
       + '&uploadId=' + encodeURIComponent(uploadId)
       + '&partNumber=' + partNumber;
     xhr.open('POST', url);
+    xhr.setRequestHeader('X-R2Drive-CSRF', 'same-origin');
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) onProgress(e.loaded);
     };
@@ -2177,7 +2502,7 @@ async function uploadDistributed(file, path, fill, pctSpan) {
 
   const initRes = await fetch('/api/distributed/init', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: jsonHeaders(),
     body: JSON.stringify({
       path,
       size: file.size,
@@ -2217,7 +2542,7 @@ async function uploadDistributed(file, path, fill, pctSpan) {
 
     const completeRes = await fetch('/api/distributed/complete', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: jsonHeaders(),
       body: JSON.stringify({ sessionId })
     });
     if (!completeRes.ok) throw new Error(await fetchErrorMessage(completeRes, 'distributed complete failed'));
@@ -2228,7 +2553,7 @@ async function uploadDistributed(file, path, fill, pctSpan) {
     if (sessionId) {
       await fetch('/api/distributed/abort', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: jsonHeaders(),
         body: JSON.stringify({ sessionId })
       }).catch(() => {});
     }
@@ -2240,6 +2565,7 @@ function uploadDistributedPart(partInfo, chunk, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', partInfo.uploadUrl);
+    if (String(partInfo.uploadUrl || '').startsWith('/')) xhr.setRequestHeader('X-R2Drive-CSRF', 'same-origin');
     if (partInfo.token) xhr.setRequestHeader('Authorization', 'Bearer ' + partInfo.token);
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) onProgress(e.loaded);
@@ -2359,7 +2685,7 @@ async function saveStorageNode() {
   if (!name || !url || !token) { showSnackbar('请填写节点名称、地址和密钥'); return; }
   const res = await fetch('/api/storage-nodes', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: jsonHeaders(),
     body: JSON.stringify({ name, url, token })
   });
   if (!res.ok) { showSnackbar('保存节点失败'); return; }
@@ -2371,12 +2697,12 @@ async function saveStorageNode() {
 }
 async function deleteStorageNode(id) {
   if (!confirm('确定删除这个存储节点？')) return;
-  const res = await fetch('/api/storage-nodes?id=' + encodeURIComponent(id), { method: 'DELETE' });
+  const res = await fetch('/api/storage-nodes?id=' + encodeURIComponent(id), { method: 'DELETE', headers: CSRF_HEADER });
   showSnackbar(res.ok ? '节点已删除' : '删除节点失败');
   loadStorageNodes();
 }
 async function testStorageNode(id) {
-  const res = await fetch('/api/storage-nodes/test?id=' + encodeURIComponent(id), { method: 'POST' });
+  const res = await fetch('/api/storage-nodes/test?id=' + encodeURIComponent(id), { method: 'POST', headers: CSRF_HEADER });
   const data = await res.json().catch(() => ({}));
   if (res.ok) {
     showSnackbar('节点正常，容量 ' + formatSize(data.used || 0) + ' / ' + formatSize(data.total || STORAGE_TOTAL));
@@ -2505,7 +2831,7 @@ function createFolder() {
   const name = document.getElementById('folderNameInput')?.value?.trim();
   if (!name) return;
   const path = currentPath ? currentPath + '/' + name : name;
-  fetch('/api/mkdir', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path}) })
+  fetch('/api/mkdir', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({path}) })
     .then(r => r.ok ? (showSnackbar('文件夹已创建'), location.reload()) : showSnackbar('创建失败'));
 }
 
@@ -2524,11 +2850,11 @@ function sortTable(by) {
 }
 
 // ── Logout ──
-function logout() { fetch('/api/logout', { method: 'POST' }).then(() => location.href = '/login'); }
+function logout() { fetch('/api/logout', { method: 'POST', headers: CSRF_HEADER }).then(() => location.href = '/login'); }
 
 // ── Version Check ──
-const CURRENT_VERSION = '1.1.8';
-const CURRENT_VERSION_CODE = 118;
+const CURRENT_VERSION = '1.1.9';
+const CURRENT_VERSION_CODE = 119;
 const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/HandsomeMJZ/R2-Cloud-Drive/refs/heads/main/version.json';
 const VERSION_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes between auto checks
 
@@ -2841,6 +3167,275 @@ function renderSharedPage(folders, files, currentPath, siteTitle, cloudIconUrl =
 </div>
 
 `, siteTitle + ' - 共享');
+}
+
+function renderShareMessagePage(title, message, siteTitle, cloudIconUrl = '') {
+  return renderHTML(`
+<header class="app-bar">
+  <a class="app-bar-logo" href="/shared">
+    ${renderLogoIcon(cloudIconUrl)}
+    <span class="app-bar-title">${escapeHtml(siteTitle)} - 分享</span>
+  </a>
+  <div class="app-bar-spacer"></div>
+  <div class="app-bar-actions">
+    <button class="icon-btn" id="darkModeToggle" title="夜间模式" onclick="toggleDarkMode(event)">
+      <span class="material-icons-round">dark_mode</span>
+    </button>
+  </div>
+</header>
+<main class="main" style="max-width:720px;margin:0 auto;padding-top:48px">
+  <div class="empty-state">
+    <span class="material-icons-round">link_off</span>
+    <h3>${escapeHtml(title)}</h3>
+    <p>${escapeHtml(message)}</p>
+  </div>
+</main>
+`, siteTitle + ' - 分享');
+}
+
+function renderSharePasswordPage(share, siteTitle, cloudIconUrl = '', error = '') {
+  return renderHTML(`
+<div class="login-wrap">
+  <button class="icon-btn login-theme-toggle" id="darkModeToggle" title="夜间模式" onclick="toggleDarkMode(event)">
+    <span class="material-icons-round">dark_mode</span>
+  </button>
+  <div class="login-card">
+    <div class="login-logo">
+      ${renderLogoIcon(cloudIconUrl, 'lock')}
+      <h1 class="login-title">受保护的分享</h1>
+      <p class="login-sub">${escapeHtml(virtualPathName(share.path) || share.path)}</p>
+    </div>
+    <label class="field-label" for="sharePwd">分享密码</label>
+    <input class="text-field" id="sharePwd" type="password" placeholder="请输入分享密码" autofocus
+      onkeydown="if(event.key==='Enter')unlockShare()">
+    <p class="login-error" id="shareError">${escapeHtml(error)}</p>
+    <button class="login-btn" onclick="unlockShare()">访问分享</button>
+  </div>
+</div>
+<script>
+function unlockShare() {
+  const password = document.getElementById('sharePwd').value;
+  fetch('/api/share-access', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-R2Drive-CSRF':'same-origin'},
+    body: JSON.stringify({id:${jsString(share.id)}, password})
+  }).then(r => r.json().then(d => ({ok:r.ok, data:d}))).then(({ok, data}) => {
+    if (ok && data.ok) location.reload();
+    else document.getElementById('shareError').textContent = data.error || '密码错误或分享不可用';
+  }).catch(() => {
+    document.getElementById('shareError').textContent = '访问失败，请稍后重试';
+  });
+}
+</script>
+`, siteTitle + ' - 分享访问');
+}
+
+function shareDownloadHref(share, relativePath = '') {
+  const params = new URLSearchParams();
+  params.set('id', share.id);
+  if (relativePath) params.set('path', relativePath);
+  return '/api/share-download?' + params.toString();
+}
+
+function renderConditionalSharePage(share, options = {}, siteTitle, cloudIconUrl = '') {
+  const currentPath = options.currentPath || '';
+  const displayName = virtualPathName(share.path) || share.path;
+  const expiresText = share.expiresAt ? '有效期至 ' + formatDate(share.expiresAt) : '长期有效';
+  const limitText = share.maxAccesses ? ('已访问 ' + share.accessCount + ' / ' + share.maxAccesses + ' 次') : ('已访问 ' + share.accessCount + ' 次');
+
+  if (share.targetType === 'file') {
+    const file = options.file;
+    const size = Number(file?.size || 0);
+    const { icon, color } = getFileIcon(file?.name || displayName);
+    const href = shareDownloadHref(share);
+    return renderHTML(`
+<header class="app-bar">
+  <a class="app-bar-logo" href="/s/${escapeAttr(share.id)}">
+    ${renderLogoIcon(cloudIconUrl, 'ios_share')}
+    <span class="app-bar-title">${escapeHtml(siteTitle)} - 分享</span>
+  </a>
+  <div class="app-bar-spacer"></div>
+  <div class="app-bar-actions">
+    <button class="icon-btn" id="darkModeToggle" title="夜间模式" onclick="toggleDarkMode(event)">
+      <span class="material-icons-round">dark_mode</span>
+    </button>
+  </div>
+</header>
+<main class="main" style="max-width:760px;margin:0 auto;padding-top:40px">
+  <nav class="breadcrumb">
+    <div class="breadcrumb-item">
+      <a class="breadcrumb-link" href="/s/${escapeAttr(share.id)}">
+        <span class="material-icons-round" style="font-size:18px;vertical-align:middle">ios_share</span> 分享文件
+      </a>
+    </div>
+  </nav>
+  <div class="file-card" style="max-width:420px;cursor:pointer" onclick="${jsAttr(`window.open(${jsString(href)})`)}">
+    <div class="file-card-icon" style="background:${color}18">
+      <span class="material-icons-round" style="color:${color};font-size:40px">${icon}</span>
+    </div>
+    <div class="file-card-name" title="${escapeAttr(file?.name || displayName)}">${escapeHtml(file?.name || displayName)}</div>
+    <div class="file-card-meta">
+      <span>${formatSize(size)}</span>
+      <span>${formatDate(file?.uploaded)}</span>
+    </div>
+    <div class="file-card-actions">
+      <button class="icon-btn" title="下载" onclick="${jsAttr(`event.stopPropagation();window.open(${jsString(href)})`)}">
+        <span class="material-icons-round">download</span>
+      </button>
+    </div>
+  </div>
+  <p style="margin-top:16px;color:var(--on-surface-variant);font-size:13px">${escapeHtml(expiresText)} · ${escapeHtml(limitText)}</p>
+</main>
+`, siteTitle + ' - 分享文件');
+  }
+
+  const folders = options.folders || [];
+  const files = options.files || [];
+  const pathParts = currentPath ? currentPath.split('/').filter(Boolean) : [];
+  const base = '/s/' + share.id;
+  const breadcrumb = `<nav class="breadcrumb">
+    <div class="breadcrumb-item">
+      <a class="breadcrumb-link" href="${escapeAttr(base)}">
+        <span class="material-icons-round" style="font-size:18px;vertical-align:middle">ios_share</span> ${escapeHtml(displayName)}
+      </a>
+    </div>
+    ${pathParts.map((part, i) => {
+      const href = base + '/?path=' + encodeURIComponent(pathParts.slice(0, i + 1).join('/'));
+      const isLast = i === pathParts.length - 1;
+      return `<div class="breadcrumb-item">
+        <span class="material-icons-round breadcrumb-sep">chevron_right</span>
+        ${isLast ? `<span class="breadcrumb-current">${escapeHtml(part)}</span>` : `<a class="breadcrumb-link" href="${escapeAttr(href)}">${escapeHtml(part)}</a>`}
+      </div>`;
+    }).join('')}
+  </nav>`;
+  const isEmpty = folders.length === 0 && files.length === 0;
+
+  return renderHTML(`
+<header class="app-bar">
+  <a class="app-bar-logo" href="${escapeAttr(base)}">
+    ${renderLogoIcon(cloudIconUrl, 'ios_share')}
+    <span class="app-bar-title">${escapeHtml(siteTitle)} - 分享</span>
+  </a>
+  <div class="app-bar-spacer"></div>
+  <div class="app-bar-actions">
+    <button class="icon-btn" id="darkModeToggle" title="夜间模式" onclick="toggleDarkMode(event)">
+      <span class="material-icons-round">dark_mode</span>
+    </button>
+  </div>
+</header>
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <a class="sidebar-item active" href="${escapeAttr(base)}">
+        <span class="material-icons-round">ios_share</span> 分享目录
+      </a>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">分享规则</div>
+      <div class="sidebar-item" style="cursor:default;color:var(--on-surface-variant);font-weight:400;font-size:13px;line-height:1.5;padding:8px 16px;height:auto;border-radius:8px;">
+        ${escapeHtml(expiresText)}<br>${escapeHtml(limitText)}
+      </div>
+    </div>
+  </nav>
+  <main class="main">
+    ${breadcrumb}
+    <div class="toolbar">
+      <div class="toolbar-right">
+        <div class="view-toggle">
+          <button class="view-toggle-btn" data-view="grid" onclick="setView('grid')" title="网格视图">
+            <span class="material-icons-round">grid_view</span>
+          </button>
+          <button class="view-toggle-btn" data-view="list" onclick="setView('list')" title="列表视图">
+            <span class="material-icons-round">view_list</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    ${isEmpty ? `
+    <div class="empty-state">
+      <span class="material-icons-round">folder_open</span>
+      <h3>目录为空</h3>
+      <p>这个分享目录下暂无可访问文件</p>
+    </div>
+    ` : `
+    <div id="fileGrid" class="file-grid">
+      ${folders.map(name => {
+        const href = base + '/?path=' + encodeURIComponent(currentPath ? currentPath + '/' + name : name);
+        return `<div class="file-card" onclick="${jsAttr(`location.href=${jsString(href)}`)}">
+          <div class="file-card-icon" style="background:#FFF8E1">
+            <span class="material-icons-round" style="color:#F9AB00;font-size:32px">folder</span>
+          </div>
+          <div class="file-card-name">${escapeHtml(name)}</div>
+          <div class="file-card-meta"><span>文件夹</span></div>
+        </div>`;
+      }).join('')}
+      ${files.map(file => {
+        const { icon, color } = getFileIcon(file.name);
+        const relative = currentPath ? currentPath + '/' + file.name : file.name;
+        const href = shareDownloadHref(share, relative);
+        const size = Number(file.size) || 0;
+        return `<div class="file-card" onclick="${jsAttr(`window.open(${jsString(href)})`)}">
+          <div class="file-card-icon" style="background:${color}18">
+            <span class="material-icons-round" style="color:${color};font-size:32px">${icon}</span>
+          </div>
+          <div class="file-card-name" title="${escapeAttr(file.name)}">${escapeHtml(file.name)}</div>
+          <div class="file-card-meta">
+            <span>${formatSize(size)}</span>
+            <span>${formatDate(file.uploaded)}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div id="fileList" style="display:none">
+      <table class="file-list">
+        <thead>
+          <tr>
+            <th><div class="th-inner">名称</div></th>
+            <th><div class="th-inner">大小</div></th>
+            <th><div class="th-inner">修改时间</div></th>
+            <th style="width:80px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${folders.map(name => {
+            const href = base + '/?path=' + encodeURIComponent(currentPath ? currentPath + '/' + name : name);
+            return `<tr onclick="${jsAttr(`location.href=${jsString(href)}`)}">
+              <td><div class="file-row-icon">
+                <span class="material-icons-round" style="color:#F9AB00;font-size:22px">folder</span>
+                <span class="file-row-name">${escapeHtml(name)}</span>
+              </div></td>
+              <td class="file-row-meta">-</td>
+              <td class="file-row-meta">-</td>
+              <td></td>
+            </tr>`;
+          }).join('')}
+          ${files.map(file => {
+            const { icon, color } = getFileIcon(file.name);
+            const relative = currentPath ? currentPath + '/' + file.name : file.name;
+            const href = shareDownloadHref(share, relative);
+            const size = Number(file.size) || 0;
+            return `<tr onclick="${jsAttr(`window.open(${jsString(href)})`)}">
+              <td><div class="file-row-icon">
+                <span class="material-icons-round" style="color:${color};font-size:22px">${icon}</span>
+                <span class="file-row-name">${escapeHtml(file.name)}</span>
+              </div></td>
+              <td class="file-row-meta">${formatSize(size)}</td>
+              <td class="file-row-meta">${formatDate(file.uploaded)}</td>
+              <td>
+                <button class="icon-btn" title="下载" onclick="${jsAttr(`event.stopPropagation();window.open(${jsString(href)})`)}">
+                  <span class="material-icons-round">download</span>
+                </button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+    `}
+  </main>
+</div>
+`, siteTitle + ' - 分享目录');
 }
 
 function renderDrivePage(folders, files, currentPath, siteTitle, cloudIconUrl = '') {
@@ -3160,6 +3755,64 @@ function renderDrivePage(folders, files, currentPath, siteTitle, cloudIconUrl = 
   </div>
 </div>
 
+<!-- Share Modal -->
+<div class="modal-overlay" id="shareModal" onclick="if(event.target===this)closeShareModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="material-icons-round" style="color:var(--primary)">ios_share</span>
+      <span class="modal-title">分享设置</span>
+    </div>
+    <div class="modal-body">
+      <div class="share-summary">
+        <span class="material-icons-round">insert_drive_file</span>
+        <div class="share-summary-main">
+          <div class="share-summary-label">分享对象</div>
+          <div class="share-summary-path" id="shareTargetPath"></div>
+        </div>
+      </div>
+      <div class="share-form-grid">
+        <div class="full">
+          <label class="field-label" for="sharePasswordInput">访问密码</label>
+          <input class="text-field" id="sharePasswordInput" type="password" placeholder="留空表示无需密码">
+          <div class="share-hint" id="sharePasswordHint">创建新分享时留空表示无需密码</div>
+          <label class="share-hint" id="shareClearPasswordLabel" style="display:none;align-items:center;gap:6px">
+            <input type="checkbox" id="shareClearPasswordInput"> 移除当前密码
+          </label>
+        </div>
+        <div>
+          <label class="field-label" for="shareDaysInput">有效天数</label>
+          <input class="text-field" id="shareDaysInput" type="number" min="0" step="1" placeholder="0">
+          <div class="share-hint">0 或留空表示长期有效</div>
+        </div>
+        <div>
+          <label class="field-label" for="shareMaxAccessInput">访问次数</label>
+          <input class="text-field" id="shareMaxAccessInput" type="number" min="0" step="1" placeholder="0">
+          <div class="share-hint">0 或留空表示不限次数</div>
+        </div>
+      </div>
+      <div class="share-result" id="shareResult">
+        <div class="share-hint">分享链接已创建</div>
+        <div class="share-link-row">
+          <input class="text-field" id="shareLinkInput" type="text" readonly>
+          <button class="btn-outlined" onclick="copyCreatedShareLink()">
+            <span class="material-icons-round">content_copy</span> 复制
+          </button>
+        </div>
+      </div>
+      <div class="share-records" id="shareRecords">
+        <div class="share-record-empty">正在加载分享记录...</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-outlined" id="shareNewBtn" onclick="resetShareForm()" style="display:none">新建分享</button>
+      <button class="btn-outlined" onclick="closeShareModal()">关闭</button>
+      <button class="fab" style="box-shadow:none" id="shareCreateBtn" onclick="submitShareForm()">
+        <span class="material-icons-round">ios_share</span> 创建分享
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Storage Nodes Modal -->
 <div class="modal-overlay" id="storageNodesModal" onclick="if(event.target===this)closeStorageNodes()">
   <div class="modal">
@@ -3258,6 +3911,8 @@ const FS_FOLDER_PREFIX = 'r2drive:fs:folder:';
 const FS_DIR_PREFIX = 'r2drive:fs:dir:';
 const NODE_PART_PREFIX = 'r2drive_node_part_';
 const STORAGE_NODE_USAGE_PREFIX = 'storage_node_usage:';
+const SHARE_LINK_PREFIX = 'share_link:';
+const SHARE_AUTH_COOKIE_PREFIX = 'r2drive_share_';
 const MANIFEST_CONTENT_TYPE = 'application/vnd.r2drive.manifest+json';
 const MANIFEST_VERSION = 1;
 const DOWNLOAD_RANGE_SIZE_BYTES = 32 * 1024 * 1024;
@@ -3266,20 +3921,60 @@ const DOWNLOAD_NODE_FETCH_RETRIES = 3;
 const DISTRIBUTED_UPLOAD_THRESHOLD_BYTES = 512 * 1024; // 512 KB - 超过此大小的文件使用分布式存储
 const BACKUP_DIRS_PREFIX = 'backup_dirs:'; // 备份目录同步 - 跨设备保留同步目录
 
-async function generateToken(password, secret) {
-  const data = `${password}:${secret}:${Date.now()}`;
+const SESSION_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+function bytesToHex(bytes) {
+  return [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function constantTimeEqual(a = '', b = '') {
+  const left = String(a || '');
+  const right = String(b || '');
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i++) diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return diff === 0;
+}
+
+async function hmacHex(secret, data) {
   const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', keyMaterial, encoder.encode(data));
-  const sigHex = [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
-  return btoa(JSON.stringify({ t: Date.now(), s: sigHex }));
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(String(secret || '')),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', keyMaterial, encoder.encode(String(data || '')));
+  return bytesToHex(sig);
+}
+
+async function sha256Hex(data) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(data || '')));
+  return bytesToHex(digest);
+}
+
+async function generateToken(password, secret) {
+  const t = Date.now();
+  const n = crypto.randomUUID().replace(/-/g, '');
+  const s = await hmacHex(secret, `session:v2:${t}:${n}`);
+  return btoa(JSON.stringify({ v: 2, t, n, s }));
 }
 
 async function verifyToken(token, secret) {
   try {
-    const { t, s } = JSON.parse(atob(token));
-    if (Date.now() - t > SESSION_DURATION) return false;
-    return true; // simplified - production: re-verify HMAC
+    if (!token || !secret) return false;
+    const { v, t, n, s } = JSON.parse(atob(token));
+    const issuedAt = Number(t);
+    const now = Date.now();
+    if (v !== 2) return false;
+    if (!Number.isFinite(issuedAt)) return false;
+    if (issuedAt > now + SESSION_FUTURE_SKEW_MS) return false;
+    if (now - issuedAt > SESSION_DURATION) return false;
+    if (!/^[a-f0-9]{64}$/i.test(String(s || ''))) return false;
+    if (!/^[a-f0-9]{32,64}$/i.test(String(n || ''))) return false;
+    const expected = await hmacHex(secret, `session:v2:${issuedAt}:${n}`);
+    return constantTimeEqual(String(s).toLowerCase(), expected);
   } catch { return false; }
 }
 
@@ -3289,10 +3984,47 @@ function getCookie(request, name) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function isUnsafeMethod(method = '') {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(String(method || '').toUpperCase());
+}
+
+function isSameOriginRequest(request) {
+  const explicit = request.headers.get('X-R2Drive-CSRF') || '';
+  if (explicit === 'same-origin') return true;
+
+  const url = new URL(request.url);
+  const origin = request.headers.get('Origin') || '';
+  if (origin) {
+    try {
+      return new URL(origin).origin === url.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  const referer = request.headers.get('Referer') || '';
+  if (referer) {
+    try {
+      return new URL(referer).origin === url.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function csrfErrorResponse() {
+  return jsonResponse({ ok: false, error: 'CSRF check failed' }, 403);
+}
+
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json;charset=UTF-8' }
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8',
+      'Cache-Control': 'no-store'
+    }
   });
 }
 
@@ -3694,6 +4426,281 @@ async function kvListKeys(env, prefix) {
     if (safety > 1000) throw new Error('too many metadata list pages');
   } while (cursor);
   return keys;
+}
+
+function shareEntryKey(id = '') {
+  return SHARE_LINK_PREFIX + String(id || '').trim();
+}
+
+function normalizeShareId(id = '') {
+  const clean = String(id || '').trim().toLowerCase();
+  return /^[a-f0-9]{16,64}$/.test(clean) ? clean : '';
+}
+
+function shareAuthCookieName(id = '') {
+  return SHARE_AUTH_COOKIE_PREFIX + normalizeShareId(id);
+}
+
+function shareNeedsPassword(share) {
+  return !!share?.passwordHash;
+}
+
+function parseShareExpiresAt(value, ttlSeconds) {
+  if (value) {
+    const ts = Date.parse(value);
+    if (!Number.isFinite(ts)) throw new Error('invalid expiresAt');
+    return new Date(ts).toISOString();
+  }
+  const ttl = Number(ttlSeconds || 0);
+  if (ttl > 0) return new Date(Date.now() + ttl * 1000).toISOString();
+  return '';
+}
+
+function parseShareMaxAccesses(value) {
+  const max = Number(value || 0);
+  if (!max) return 0;
+  if (!Number.isInteger(max) || max < 1) throw new Error('invalid maxAccesses');
+  return max;
+}
+
+function normalizeShareRecord(data) {
+  if (!data || data.type !== 'share') return null;
+  const id = normalizeShareId(data.id);
+  const path = normalizeVirtualPath(data.path || '');
+  const targetType = data.targetType === 'folder' ? 'folder' : 'file';
+  if (!id || !path) return null;
+  return {
+    type: 'share',
+    id,
+    path,
+    targetType,
+    passwordHash: String(data.passwordHash || ''),
+    expiresAt: String(data.expiresAt || ''),
+    maxAccesses: Math.max(0, Number(data.maxAccesses || 0) || 0),
+    accessCount: Math.max(0, Number(data.accessCount || 0) || 0),
+    passwordSalt: String(data.passwordSalt || id),
+    createdAt: String(data.createdAt || ''),
+    updatedAt: String(data.updatedAt || '')
+  };
+}
+
+function publicShare(share) {
+  const normalized = normalizeShareRecord(share);
+  if (!normalized) return null;
+  return {
+    id: normalized.id,
+    path: normalized.path,
+    targetType: normalized.targetType,
+    hasPassword: shareNeedsPassword(normalized),
+    expiresAt: normalized.expiresAt,
+    maxAccesses: normalized.maxAccesses,
+    accessCount: normalized.accessCount,
+    createdAt: normalized.createdAt,
+    updatedAt: normalized.updatedAt,
+    url: '/s/' + normalized.id,
+    inactiveReason: shareInactiveReason(normalized)
+  };
+}
+
+async function getShare(env, id) {
+  const cleanId = normalizeShareId(id);
+  if (!cleanId) return null;
+  return normalizeShareRecord(await kvGetJson(env, shareEntryKey(cleanId)));
+}
+
+async function saveShare(env, share) {
+  const normalized = normalizeShareRecord(share);
+  if (!normalized) throw new Error('invalid share');
+  await kvPutJson(env, shareEntryKey(normalized.id), {
+    ...normalized,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function deleteShare(env, id) {
+  const cleanId = normalizeShareId(id);
+  if (!cleanId) return false;
+  await kvDelete(env, shareEntryKey(cleanId));
+  return true;
+}
+
+async function listShares(env, filterPath = '') {
+  const keys = await kvListKeys(env, SHARE_LINK_PREFIX);
+  const shares = (await Promise.all(keys.map(key => kvGetJson(env, key))))
+    .map(normalizeShareRecord)
+    .filter(Boolean);
+  const cleanFilter = normalizeVirtualPath(filterPath || '');
+  return shares
+    .filter(share => !cleanFilter || share.path === cleanFilter)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+async function getShareTargetType(env, path) {
+  const clean = assertVirtualPath(path);
+  if (await getFileEntry(env, clean)) return 'file';
+  if (await getFolderEntry(env, clean)) return 'folder';
+  throw new Error('not found');
+}
+
+async function hashSharePassword(password, id, env) {
+  const secret = env.ACCESS_PASSWORD || env.STORAGE_NODE_TOKEN || '';
+  const payload = `share-password:v1:${id}:${String(password || '')}`;
+  return secret ? hmacHex(secret, payload) : sha256Hex(payload);
+}
+
+async function verifySharePassword(share, password, env) {
+  if (!shareNeedsPassword(share)) return true;
+  const expected = await hashSharePassword(password, share.passwordSalt || share.id, env);
+  return constantTimeEqual(expected, share.passwordHash);
+}
+
+async function createShare(env, body = {}) {
+  const cleanPath = assertVirtualPath(body.path || '');
+  const targetType = await getShareTargetType(env, cleanPath);
+  const id = crypto.randomUUID().replace(/-/g, '');
+  const now = new Date().toISOString();
+  const password = String(body.password || '');
+  const expiresAt = parseShareExpiresAt(body.expiresAt, body.ttlSeconds);
+  if (expiresAt && Date.parse(expiresAt) <= Date.now()) throw new Error('expiresAt must be in the future');
+  const share = {
+    type: 'share',
+    id,
+    path: cleanPath,
+    targetType,
+    passwordHash: password ? await hashSharePassword(password, id, env) : '',
+    passwordSalt: id,
+    expiresAt,
+    maxAccesses: parseShareMaxAccesses(body.maxAccesses),
+    accessCount: 0,
+    createdAt: now,
+    updatedAt: now
+  };
+  await saveShare(env, share);
+  return normalizeShareRecord(share);
+}
+
+async function updateShare(env, id, body = {}) {
+  const share = await getShare(env, id);
+  if (!share) throw new Error('not found');
+  const updated = { ...share };
+
+  if (Object.prototype.hasOwnProperty.call(body, 'expiresAt') || Object.prototype.hasOwnProperty.call(body, 'ttlSeconds')) {
+    const expiresAt = parseShareExpiresAt(body.expiresAt, body.ttlSeconds);
+    if (expiresAt && Date.parse(expiresAt) <= Date.now()) throw new Error('expiresAt must be in the future');
+    updated.expiresAt = expiresAt;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'maxAccesses')) {
+    updated.maxAccesses = parseShareMaxAccesses(body.maxAccesses);
+  }
+
+  if (body.passwordMode === 'clear') {
+    updated.passwordHash = '';
+  } else if (body.passwordMode === 'set' || String(body.password || '')) {
+    const password = String(body.password || '');
+    if (!password) throw new Error('missing password');
+    updated.passwordSalt = updated.passwordSalt || updated.id;
+    updated.passwordHash = await hashSharePassword(password, updated.passwordSalt, env);
+  }
+
+  if (body.resetAccessCount === true) updated.accessCount = 0;
+  await saveShare(env, updated);
+  return getShare(env, updated.id);
+}
+
+async function refreshShareLink(env, id) {
+  const share = await getShare(env, id);
+  if (!share) throw new Error('not found');
+  const now = new Date().toISOString();
+  const refreshed = {
+    ...share,
+    id: crypto.randomUUID().replace(/-/g, ''),
+    passwordSalt: share.passwordSalt || share.id,
+    accessCount: 0,
+    createdAt: now,
+    updatedAt: now
+  };
+  await saveShare(env, refreshed);
+  await deleteShare(env, share.id);
+  return getShare(env, refreshed.id);
+}
+
+function shareInactiveReason(share) {
+  if (!share) return 'not_found';
+  if (share.expiresAt) {
+    const expiresAt = Date.parse(share.expiresAt);
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return 'expired';
+  }
+  if (share.maxAccesses && share.accessCount >= share.maxAccesses) return 'access_limit';
+  return '';
+}
+
+async function consumeShareAccess(env, share) {
+  const reason = shareInactiveReason(share);
+  if (reason) throw new Error(reason);
+  const updated = {
+    ...share,
+    accessCount: Math.max(0, Number(share.accessCount || 0)) + 1,
+    updatedAt: new Date().toISOString()
+  };
+  await saveShare(env, updated);
+  return normalizeShareRecord(updated);
+}
+
+function shareTokenSecret(env, share) {
+  return env.ACCESS_PASSWORD || env.STORAGE_NODE_TOKEN || share.passwordHash || share.id;
+}
+
+async function generateShareAccessToken(share, env) {
+  const t = Date.now();
+  const n = crypto.randomUUID().replace(/-/g, '');
+  const version = share.updatedAt || share.createdAt || '';
+  const payload = `share-auth:v1:${share.id}:${version}:${t}:${n}`;
+  const s = await hmacHex(shareTokenSecret(env, share), payload);
+  return btoa(JSON.stringify({ v: 1, id: share.id, t, n, s }));
+}
+
+async function verifyShareAccessToken(token, share, env) {
+  try {
+    if (!token || !shareNeedsPassword(share)) return false;
+    const { v, id, t, n, s } = JSON.parse(atob(token));
+    const issuedAt = Number(t);
+    const now = Date.now();
+    if (v !== 1 || id !== share.id) return false;
+    if (!Number.isFinite(issuedAt) || issuedAt > now + SESSION_FUTURE_SKEW_MS) return false;
+    if (now - issuedAt > SESSION_DURATION) return false;
+    if (!/^[a-f0-9]{64}$/i.test(String(s || ''))) return false;
+    if (!/^[a-f0-9]{32,64}$/i.test(String(n || ''))) return false;
+    const version = share.updatedAt || share.createdAt || '';
+    const payload = `share-auth:v1:${share.id}:${version}:${issuedAt}:${n}`;
+    const expected = await hmacHex(shareTokenSecret(env, share), payload);
+    return constantTimeEqual(String(s).toLowerCase(), expected);
+  } catch {
+    return false;
+  }
+}
+
+async function hasShareAccess(request, env, share) {
+  if (!shareNeedsPassword(share)) return true;
+  return verifyShareAccessToken(getCookie(request, shareAuthCookieName(share.id)), share, env);
+}
+
+function shareCookieMaxAge(share) {
+  let seconds = Math.floor(SESSION_DURATION / 1000);
+  if (share?.expiresAt) {
+    const expiresAt = Date.parse(share.expiresAt);
+    if (Number.isFinite(expiresAt)) seconds = Math.min(seconds, Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)));
+  }
+  return Math.max(0, seconds);
+}
+
+function shareTargetPath(share, subPath = '') {
+  const relative = assertVirtualPath(subPath || '', { allowRoot: true });
+  if (share.targetType === 'file') {
+    if (relative) throw new Error('invalid share path');
+    return share.path;
+  }
+  return joinVirtualPath(share.path, relative);
 }
 
 function normalizeDirectoryIndex(index, path = '') {
@@ -5295,10 +6302,11 @@ export default {
     }
 
     if (path === '/api/logout' && request.method === 'POST') {
+      if (!isSameOriginRequest(request)) return csrfErrorResponse();
       return new Response('{}', {
         headers: {
           'Content-Type': 'application/json',
-          'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; Max-Age=0`
+          'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`
         }
       });
     }
@@ -5321,7 +6329,93 @@ export default {
     }
 
         // ── Clipboard API (metadata-backed, no auth required for clipboard operations) ──
+    if (path.startsWith('/s/') && request.method === 'GET') {
+      const shareId = normalizeShareId(path.slice(3).split('/')[0] || '');
+      const share = await getShare(env, shareId);
+      if (!share) {
+        return new Response(renderShareMessagePage('分享不存在', '这个分享链接不存在或已被删除。', siteTitle, cloudIconUrl), {
+          status: 404,
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
+      }
+
+      const hasAccess = await hasShareAccess(request, env, share);
+      const reason = shareInactiveReason(share);
+      if (reason === 'expired' || (reason && !(shareNeedsPassword(share) && hasAccess))) {
+        const message = reason === 'access_limit' ? '这个分享链接的访问次数已用完。' : '这个分享链接已过期。';
+        return new Response(renderShareMessagePage('分享不可用', message, siteTitle, cloudIconUrl), {
+          status: 410,
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
+      }
+
+      if (shareNeedsPassword(share) && !hasAccess) {
+        return new Response(renderSharePasswordPage(share, siteTitle, cloudIconUrl), {
+          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+        });
+      }
+
+      const activeShare = shareNeedsPassword(share) ? share : await consumeShareAccess(env, share);
+      if (activeShare.targetType === 'file') {
+        const file = await getFileEntry(env, activeShare.path);
+        if (!file) {
+          return new Response(renderShareMessagePage('文件不存在', '分享的文件已被移动或删除。', siteTitle, cloudIconUrl), {
+            status: 404,
+            headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          });
+        }
+        const html = renderConditionalSharePage(activeShare, { file }, siteTitle, cloudIconUrl);
+        return new Response(html, { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
+      }
+
+      const subPath = assertVirtualPath(url.searchParams.get('path') || '', { allowRoot: true });
+      const folderPath = shareTargetPath(activeShare, subPath);
+      const { folders, files } = await listDirectory(env, folderPath);
+      const html = renderConditionalSharePage(activeShare, { folders, files, currentPath: subPath }, siteTitle, cloudIconUrl);
+      return new Response(html, { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
+    }
+
+    if (path === '/api/share-access' && request.method === 'POST') {
+      if (!isSameOriginRequest(request)) return csrfErrorResponse();
+      const body = await request.json().catch(() => ({}));
+      const share = await getShare(env, body.id);
+      if (!share) return jsonResponse({ ok: false, error: 'share not found' }, 404);
+      const reason = shareInactiveReason(share);
+      if (reason) return jsonResponse({ ok: false, error: reason === 'access_limit' ? 'access limit reached' : 'share expired' }, 410);
+      if (!shareNeedsPassword(share)) return jsonResponse({ ok: true, url: '/s/' + share.id });
+      if (!await verifySharePassword(share, body.password || '', env)) {
+        return jsonResponse({ ok: false, error: 'password incorrect' }, 403);
+      }
+      const updatedShare = await consumeShareAccess(env, share);
+      const token = await generateShareAccessToken(updatedShare, env);
+      return new Response(JSON.stringify({ ok: true, url: '/s/' + updatedShare.id }), {
+        headers: {
+          'Content-Type': 'application/json;charset=UTF-8',
+          'Cache-Control': 'no-store',
+          'Set-Cookie': `${shareAuthCookieName(updatedShare.id)}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${shareCookieMaxAge(updatedShare)}`
+        }
+      });
+    }
+
+    if (path === '/api/share-download' && (request.method === 'GET' || request.method === 'HEAD')) {
+      const share = await getShare(env, url.searchParams.get('id') || '');
+      if (!share) return new Response('Share not found', { status: 404 });
+      const hasAccess = await hasShareAccess(request, env, share);
+      const reason = shareInactiveReason(share);
+      if (reason === 'expired' || (reason && !(shareNeedsPassword(share) && hasAccess))) {
+        return new Response(reason === 'access_limit' ? 'Share access limit reached' : 'Share expired', { status: 410 });
+      }
+      if (shareNeedsPassword(share) && !hasAccess) return new Response('Share password required', { status: 403 });
+      const filePath = shareTargetPath(share, url.searchParams.get('path') || '');
+      return storedVirtualFileResponse(request, R2, filePath, env, {
+        filename: virtualPathName(filePath),
+        contentType: getMimeType(filePath)
+      });
+    }
+
     if (path === '/api/clipboard' && request.method === 'POST') {
+      if (!await isAuthenticated(request, env)) return new Response('Unauthorized', { status: 401 });
+      if (!isSameOriginRequest(request)) return csrfErrorResponse();
       // Save clipboard to metadata store
       const clipboardId = url.searchParams.get('id') || 'default';
       const body = await request.json().catch(() => ({}));
@@ -5336,6 +6430,7 @@ export default {
       return Response.json({ ok: false, error: 'invalid data' }, { status: 400 });
     }
     if (path === '/api/clipboard' && request.method === 'GET') {
+      if (!await isAuthenticated(request, env)) return new Response('Unauthorized', { status: 401 });
       // Get clipboard from metadata store
       const clipboardId = url.searchParams.get('id') || 'default';
       const data = await kvGetRaw(env, 'clipboard_' + clipboardId);
@@ -5345,6 +6440,8 @@ export default {
       return Response.json({ items: [], action: null, sourcePath: '' });
     }
     if (path === '/api/clipboard' && request.method === 'DELETE') {
+      if (!await isAuthenticated(request, env)) return new Response('Unauthorized', { status: 401 });
+      if (!isSameOriginRequest(request)) return csrfErrorResponse();
       // Clear clipboard from metadata store
       const clipboardId = url.searchParams.get('id') || 'default';
       await kvDelete(env, 'clipboard_' + clipboardId);
@@ -5355,10 +6452,6 @@ export default {
     const authed = await isAuthenticated(request, env);
     if (!authed) {
       if (path.startsWith('/api/')) {
-        // Allow clipboard API access without auth
-        if (path === '/api/clipboard') {
-          return new Response('clipboard API handled above', { status: 200 });
-        }
         // Allow public download from shared folder
         if (path === '/api/download') {
           const filePath = url.searchParams.get('path') || '';
@@ -5375,6 +6468,57 @@ export default {
     }
 
     // ── API Routes ──
+
+    if (path.startsWith('/api/') && isUnsafeMethod(request.method) && !isSameOriginRequest(request)) {
+      return csrfErrorResponse();
+    }
+
+    if (path === '/api/shares' && request.method === 'GET') {
+      const shares = await listShares(env, url.searchParams.get('path') || '');
+      return jsonResponse({ shares: shares.map(publicShare).filter(Boolean) });
+    }
+
+    if (path === '/api/shares/refresh' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const id = body.id || url.searchParams.get('id') || '';
+        const share = await refreshShareLink(env, id);
+        return jsonResponse({ ok: true, share: publicShare(share) });
+      } catch (err) {
+        const message = err?.message || 'refresh failed';
+        return jsonResponse({ ok: false, error: message }, message === 'not found' ? 404 : 400);
+      }
+    }
+
+    if (path === '/api/shares' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const share = await createShare(env, body);
+        return jsonResponse({ ok: true, share: publicShare(share) });
+      } catch (err) {
+        const message = err?.message || 'share create failed';
+        return jsonResponse({ ok: false, error: message }, message === 'not found' ? 404 : 400);
+      }
+    }
+
+    if (path === '/api/shares' && request.method === 'PUT') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const id = body.id || url.searchParams.get('id') || '';
+        const share = await updateShare(env, id, body);
+        return jsonResponse({ ok: true, share: publicShare(share) });
+      } catch (err) {
+        const message = err?.message || 'share update failed';
+        return jsonResponse({ ok: false, error: message }, message === 'not found' ? 404 : 400);
+      }
+    }
+
+    if (path === '/api/shares' && request.method === 'DELETE') {
+      const id = url.searchParams.get('id') || '';
+      if (!normalizeShareId(id)) return jsonResponse({ ok: false, error: 'missing id' }, 400);
+      await deleteShare(env, id);
+      return jsonResponse({ ok: true });
+    }
 
     if (path === '/api/storage-nodes' && request.method === 'GET') {
       try {
